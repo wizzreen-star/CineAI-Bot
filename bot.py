@@ -3,122 +3,81 @@ import discord
 from discord.ext import commands
 from flask import Flask
 import google.generativeai as genai
-from moviepy.editor import TextClip, concatenate_videoclips
-import requests
-import json
-from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from google.oauth2.credentials import Credentials
+from moviepy.editor import TextClip, concatenate_videoclips, ColorClip
 
-# =====================================================
-# ✅ Load environment variables
-# =====================================================
+# ------------------ ENVIRONMENT ------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
 if not GEMINI_API_KEY:
-    print("❌ GEMINI_API_KEY not found in environment variables!")
-else:
-    print("✅ GEMINI_API_KEY loaded successfully.")
-
+    raise Exception("❌ GEMINI_API_KEY not found!")
 if not DISCORD_TOKEN:
-    print("❌ DISCORD_TOKEN not found in environment variables!")
-else:
-    print("✅ DISCORD_TOKEN loaded successfully.")
+    raise Exception("❌ DISCORD_TOKEN not found!")
 
-# =====================================================
-# ✅ Flask setup (for Render port binding)
-# =====================================================
-app = Flask(__name__)
+genai.configure(api_key=GEMINI_API_KEY)
 
-@app.route('/')
-def home():
-    return "CineAI Bot is running successfully!"
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
-
-# =====================================================
-# ✅ Discord Bot Setup
-# =====================================================
+# ------------------ DISCORD ------------------
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-genai.configure(api_key=GEMINI_API_KEY)
+# ------------------ FLASK KEEPALIVE ------------------
+app = Flask(__name__)
 
-# =====================================================
-# ✅ Helper Functions
-# =====================================================
+@app.route("/")
+def home():
+    return "✅ CineAI Bot is running!"
 
-def create_video_from_text(text, output_path="output.mp4"):
-    """Create a simple text-based video using MoviePy."""
-    clip = TextClip(text, fontsize=48, color='white', size=(1280, 720), bg_color='black', duration=5)
-    clip.write_videofile(output_path, fps=24)
-    return output_path
+# ------------------ YOUTUBE UPLOAD ------------------
+def upload_to_youtube(video_path, title, description):
+    creds = Credentials.from_authorized_user_file("token.json", ["https://www.googleapis.com/auth/youtube.upload"])
+    youtube = build("youtube", "v3", credentials=creds)
 
+    request = youtube.videos().insert(
+        part="snippet,status",
+        body={
+            "snippet": {"title": title, "description": description},
+            "status": {"privacyStatus": "public"}
+        },
+        media_body=MediaFileUpload(video_path, chunksize=-1, resumable=True)
+    )
+    response = request.execute()
+    return f"https://www.youtube.com/watch?v={response['id']}"
 
-def upload_to_youtube(title, description, file_path):
-    """Upload a video to YouTube (requires OAuth token setup)."""
-    try:
-        creds = Credentials.from_authorized_user_file("token.json", ["https://www.googleapis.com/auth/youtube.upload"])
-        youtube = build("youtube", "v3", credentials=creds)
+# ------------------ GEMINI VIDEO MAKER ------------------
+def make_video_from_text(prompt):
+    print(f"🎬 Generating idea for: {prompt}")
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    idea = model.generate_content(f"Write a short creative video idea for: {prompt}")
+    script = idea.text
 
-        request_body = {
-            "snippet": {
-                "title": title,
-                "description": description,
-                "tags": ["AI", "CineAI", "Gemini"],
-                "categoryId": "22"
-            },
-            "status": {
-                "privacyStatus": "public"
-            }
-        }
+    print("🎥 Creating simple text video...")
+    clips = []
+    lines = script.split(". ")
+    for line in lines:
+        txt = TextClip(line, fontsize=60, color='white', size=(1080, 1920), bg_color='black', duration=2)
+        clips.append(txt)
+    final = concatenate_videoclips(clips)
+    final.write_videofile("output.mp4", fps=24)
+    return "output.mp4", script
 
-        media = MediaFileUpload(file_path, resumable=True)
-        upload_request = youtube.videos().insert(
-            part="snippet,status",
-            body=request_body,
-            media_body=media
-        )
-        response = upload_request.execute()
-        return f"https://youtu.be/{response['id']}"
-    except Exception as e:
-        return f"❌ Upload failed: {e}"
-
-
-# =====================================================
-# ✅ Discord Commands
-# =====================================================
-
-@bot.event
-async def on_ready():
-    print(f"🤖 Logged in as {bot.user}")
-
-
+# ------------------ DISCORD COMMAND ------------------
 @bot.command()
 async def video(ctx, *, prompt: str):
-    """Generate video idea, create video, upload to YouTube."""
-    await ctx.send(f"💡 Thinking of an idea for: **{prompt}** ...")
+    await ctx.reply(f"💡 Thinking of an idea for: **{prompt}** ...")
+    try:
+        video_path, script = make_video_from_text(prompt)
+        await ctx.reply("🎬 Video generated! Uploading to YouTube...")
+        youtube_url = upload_to_youtube(video_path, title=prompt, description=script)
+        await ctx.reply(f"✅ Uploaded to YouTube!\n{youtube_url}")
+    except Exception as e:
+        await ctx.reply(f"❌ Error: {str(e)}")
 
-    # Generate text using Gemini
-    model = genai.GenerativeModel("gemini-pro")
-    response = model.generate_content(f"Create a short YouTube video script about: {prompt}")
-    idea_text = response.text
-
-    await ctx.send("🎬 Creating video...")
-
-    # Create video
-    video_path = create_video_from_text(idea_text)
-    await ctx.send("📤 Uploading to YouTube...")
-
-    # Upload video
-    youtube_url = upload_to_youtube(prompt, idea_text, video_path)
-    await ctx.send(f"✅ Uploaded! Watch it here: {youtube_url}")
-
-
-# =====================================================
-# ✅ Run Discord Bot
-# =====================================================
-bot.run(DISCORD_TOKEN)
+# ------------------ START EVERYTHING ------------------
+if __name__ == "__main__":
+    import threading
+    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))).start()
+    bot.run(DISCORD_TOKEN)
