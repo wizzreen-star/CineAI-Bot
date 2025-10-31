@@ -1,66 +1,60 @@
-import os
 import discord
 from discord.ext import commands
-import requests
-import time
+from gtts import gTTS
+from moviepy.editor import TextClip, concatenate_videoclips, AudioFileClip
+import os
+import asyncio
+
+# Load environment variables (if using Render)
+from dotenv import load_dotenv
+load_dotenv()
+
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
 intents = discord.Intents.default()
 intents.message_content = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-PIKA_API_KEY = os.getenv("PIKA_API_KEY")
 
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
 
 @bot.command()
-async def sora(ctx, *, prompt: str):
-    """Generate an AI video using Pika Labs"""
-    await ctx.send(f"🎬 Generating video for: **{prompt}** ... please wait 30–60 seconds")
+async def video(ctx, *, prompt: str):
+    """Generate a simple AI video from text"""
+    await ctx.send(f"🎬 Generating video for: **{prompt}** ...")
 
-    # Step 1: Request video generation
-    headers = {
-        "Authorization": f"Bearer {PIKA_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    try:
+        # --- Step 1: Create audio from text ---
+        tts = gTTS(prompt)
+        audio_path = "speech.mp3"
+        tts.save(audio_path)
 
-    data = {
-        "model": "pika-v1",  # Pika Labs model
-        "prompt": prompt
-    }
+        # --- Step 2: Create text-based frames ---
+        clips = []
+        words = prompt.split()
+        step = max(1, len(words) // 5)
+        for i in range(0, len(words), step):
+            text = " ".join(words[:i+step])
+            clip = TextClip(text, fontsize=50, color='white', bg_color='black', size=(1280, 720), duration=1)
+            clips.append(clip)
 
-    response = requests.post("https://api.pika.art/generate", headers=headers, json=data)
+        # --- Step 3: Combine all clips ---
+        video = concatenate_videoclips(clips)
+        video = video.set_audio(AudioFileClip(audio_path))
 
-    if response.status_code != 200:
-        await ctx.send("❌ Error connecting to Pika API.")
-        return
+        output_path = "output.mp4"
+        video.write_videofile(output_path, fps=24)
 
-    job = response.json()
-    job_id = job.get("id")
+        await ctx.send(file=discord.File(output_path))
 
-    await ctx.send("⏳ Video generation started... waiting for completion")
+    except Exception as e:
+        await ctx.send(f"❌ Error: {str(e)}")
 
-    # Step 2: Poll for result
-    video_url = None
-    for _ in range(40):  # Wait up to ~80 seconds
-        status = requests.get(f"https://api.pika.art/status/{job_id}", headers=headers)
-        result = status.json()
+    finally:
+        # Clean up temporary files
+        for f in ["speech.mp3", "output.mp4"]:
+            if os.path.exists(f):
+                os.remove(f)
 
-        if result.get("status") == "completed":
-            video_url = result["output"]["video"]
-            break
-        elif result.get("status") == "failed":
-            await ctx.send("⚠️ Video generation failed.")
-            return
-
-        time.sleep(2)
-
-    if video_url:
-        await ctx.send("✅ Done! Here's your AI-generated video:")
-        await ctx.send(video_url)
-    else:
-        await ctx.send("⏰ Timed out waiting for video. Try again later!")
-
-bot.run(os.getenv("DISCORD_TOKEN"))
+bot.run(DISCORD_TOKEN)
