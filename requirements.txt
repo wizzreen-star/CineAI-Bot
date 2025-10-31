@@ -1,7 +1,8 @@
-discord.py
-gtts
-moviepy==2.0.0
-imageio[ffmpeg]
-numpy
-requests
-python-dotenv
+discord.py==2.3.2
+gtts==2.5.4
+moviepy==2.0.0.dev2
+imageio==2.37.0
+imageio-ffmpeg==0.6.0
+numpy==2.3.4
+requests==2.32.3
+python-dotenv==1.2.1
