@@ -1,23 +1,19 @@
 import os
 import discord
-import google.generativeai as genai
 from discord.ext import commands
-from threading import Thread
+import google.generativeai as genai
 from flask import Flask
 
-# === Environment Variables ===
+# --- Load Environment Variables ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# === Gemini Setup ===
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-1.5-flash")
-else:
-    model = None
+if not GEMINI_API_KEY:
     print("❌ GEMINI_API_KEY not found in environment variables!")
+else:
+    genai.configure(api_key=GEMINI_API_KEY)
 
-# === Discord Bot Setup ===
+# --- Discord Bot Setup ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -28,39 +24,40 @@ async def on_ready():
 
 @bot.command()
 async def hello(ctx):
-    await ctx.send("👋 Hello! I’m CineAI — powered by Google Gemini!")
+    await ctx.send("👋 Hello! I’m CineAI — your movie assistant bot!")
 
 @bot.command()
 async def video(ctx, *, prompt: str):
-    """Generate an AI video idea or concept using Gemini"""
-    if not model:
+    """Generate a creative video idea (text only for now) using Gemini"""
+    if not GEMINI_API_KEY:
         await ctx.send("⚠️ Gemini API key missing — please set GEMINI_API_KEY in Render.")
         return
 
-    await ctx.send(f"🎬 Thinking about: **{prompt}** ... please wait ⏳")
+    await ctx.send(f"🎬 Thinking of a cool AI video idea for: **{prompt}** ... ⏳")
 
     try:
-        response = model.generate_content(f"Create a detailed video concept for: {prompt}")
-        idea = response.text or "No response from Gemini."
-        await ctx.send(f"✨ **Gemini’s Idea:**\n{idea[:1800]}")
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(f"Write a short creative video script for: {prompt}")
+        await ctx.send(f"🎥 **AI Video Idea:**\n{response.text}")
     except Exception as e:
-        await ctx.send(f"❌ Gemini error: {e}")
+        await ctx.send(f"❌ Gemini API error: {e}")
 
-# === Flask Web Server (for Render port binding) ===
+# --- Flask App (for Render port binding) ---
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ CineAI (Gemini Bot) is running successfully!"
+    return "🤖 CineAI Discord Bot is running!"
 
-def run_web():
-    port = int(os.getenv("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+# --- Run both Flask & Discord ---
+if __name__ == "__main__":
+    import threading
 
-Thread(target=run_web).start()
+    def run_discord():
+        if DISCORD_TOKEN:
+            bot.run(DISCORD_TOKEN)
+        else:
+            print("❌ DISCORD_TOKEN not found in environment variables!")
 
-# === Run Discord Bot ===
-if not DISCORD_TOKEN:
-    print("❌ ERROR: DISCORD_TOKEN not found in environment variables.")
-else:
-    bot.run(DISCORD_TOKEN)
+    threading.Thread(target=run_discord).start()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
