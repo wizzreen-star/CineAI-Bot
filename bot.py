@@ -5,7 +5,7 @@ from discord.ext import commands
 
 # --- Environment Variables ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")  # From Render
-HF_TOKEN = os.getenv("HF_TOKEN")  # Hugging Face API key (hf_...)
+HF_TOKEN = os.getenv("HF_API_KEY")  # Hugging Face API key (hf_...)
 
 # --- Bot Setup ---
 intents = discord.Intents.default()
