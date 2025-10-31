@@ -4,8 +4,8 @@ import requests
 from discord.ext import commands
 
 # --- Environment Variables ---
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")  # From Render
-HF_TOKEN = os.getenv("HF_API_KEY")  # Hugging Face API key
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")  # from Render
+HF_API_KEY = os.getenv("HF_API_KEY")        # your Hugging Face token (hf_...)
 
 # --- Bot Setup ---
 intents = discord.Intents.default()
@@ -25,9 +25,8 @@ async def video(ctx, *, prompt: str):
     """Generate an AI video from a text prompt"""
     await ctx.send(f"🎬 Generating video for: **{prompt}** ... please wait ⏳")
 
-    # Hugging Face text-to-video model
     url = "https://api-inference.huggingface.co/models/ali-vilab/text-to-video-ms-1.7b"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
     payload = {"inputs": prompt}
 
     try:
@@ -37,9 +36,10 @@ async def video(ctx, *, prompt: str):
             filename = "ai_video.mp4"
             with open(filename, "wb") as f:
                 f.write(response.content)
-            await ctx.send("✅ Here’s your AI-generated video:", file=discord.File(filename))
+            await ctx.send(file=discord.File(filename))
         else:
             await ctx.send(f"⚠️ API error ({response.status_code}): {response.text[:200]}")
+
     except Exception as e:
         await ctx.send(f"❌ Failed to generate video: {e}")
 
@@ -48,6 +48,7 @@ if not DISCORD_TOKEN:
     print("❌ ERROR: DISCORD_TOKEN not found in environment variables.")
 else:
     bot.run(DISCORD_TOKEN)
+
 from flask import Flask
 import threading
 
