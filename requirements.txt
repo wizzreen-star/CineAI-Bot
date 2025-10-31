@@ -2,3 +2,4 @@ discord.py
 moviepy
 gtts
 requests
+aiohttp
