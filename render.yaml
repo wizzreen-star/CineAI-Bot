@@ -3,13 +3,21 @@ services:
     name: cineai-bot
     runtime: python
     pythonVersion: 3.11.9
-    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+
+    # 🔧 Build: install ffmpeg + dependencies
+    buildCommand: "apt-get update && apt-get install -y ffmpeg && pip install --upgrade pip && pip install -r requirements.txt"
+
+    # 🚀 Start your bot + Flask server
     startCommand: "python3 bot.py"
+
+    # 🌿 Environment variables (set in Render Dashboard → Environment)
     envVars:
       - key: DISCORD_TOKEN
         sync: false
       - key: GEMINI_API_KEY
         sync: false
-      - key: YOUTUBE_API_KEY
+      - key: YOUTUBE_SERVICE_ACCOUNT
         sync: false
+
+    # Auto redeploys when you push new code
     autoDeploy: true
