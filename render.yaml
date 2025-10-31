@@ -11,5 +11,3 @@ services:
       - key: DISCORD_TOKEN
         sync: false
     autoDeploy: true
-
-Fix Python version to 3.11 for audioop module issue
