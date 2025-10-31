@@ -1,11 +1,12 @@
 import discord
 from discord.ext import commands
 from gtts import gTTS
-from moviepy.editor import TextClip, concatenate_videoclips, AudioFileClip
+from moviepy.editor import ImageClip, concatenate_videoclips, AudioFileClip
 import os
-import asyncio
+import requests
+import base64
+from io import BytesIO
 
-# Load environment variables (if using Render)
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -15,45 +16,57 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# Use a free Hugging Face model for image generation
+HF_API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2"
+HF_API_KEY = os.getenv("HF_API_KEY")  # optional for free-tier usage
+
+headers = {"Authorization": f"Bearer {HF_API_KEY}"} if HF_API_KEY else {}
+
+def generate_image(prompt):
+    """Generate one AI image from text prompt"""
+    data = {"inputs": prompt}
+    response = requests.post(HF_API_URL, headers=headers, json=data)
+    if response.status_code == 200:
+        image_data = response.content
+        return ImageClip(BytesIO(image_data)).set_duration(2)
+    else:
+        raise Exception(f"Image generation failed: {response.text}")
+
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
 
 @bot.command()
 async def video(ctx, *, prompt: str):
-    """Generate a simple AI video from text"""
-    await ctx.send(f"🎬 Generating video for: **{prompt}** ...")
+    """Create a short AI video with images + audio narration"""
+    await ctx.send(f"🎬 Generating AI video for: **{prompt}** (please wait 1–2 min)...")
 
     try:
-        # --- Step 1: Create audio from text ---
+        # 1. Create speech
         tts = gTTS(prompt)
-        audio_path = "speech.mp3"
-        tts.save(audio_path)
+        tts.save("speech.mp3")
 
-        # --- Step 2: Create text-based frames ---
+        # 2. Generate multiple images
         clips = []
-        words = prompt.split()
-        step = max(1, len(words) // 5)
-        for i in range(0, len(words), step):
-            text = " ".join(words[:i+step])
-            clip = TextClip(text, fontsize=50, color='white', bg_color='black', size=(1280, 720), duration=1)
+        for i in range(5):
+            img_prompt = f"{prompt}, cinematic lighting, 4k art, frame {i+1}"
+            clip = generate_image(img_prompt)
             clips.append(clip)
 
-        # --- Step 3: Combine all clips ---
-        video = concatenate_videoclips(clips)
-        video = video.set_audio(AudioFileClip(audio_path))
+        # 3. Combine video
+        video = concatenate_videoclips(clips, method="compose")
+        video = video.set_audio(AudioFileClip("speech.mp3"))
+        output_path = "ai_video.mp4"
+        video.write_videofile(output_path, fps=24, codec="libx264")
 
-        output_path = "output.mp4"
-        video.write_videofile(output_path, fps=24)
-
+        # 4. Send back to Discord
         await ctx.send(file=discord.File(output_path))
 
     except Exception as e:
         await ctx.send(f"❌ Error: {str(e)}")
 
     finally:
-        # Clean up temporary files
-        for f in ["speech.mp3", "output.mp4"]:
+        for f in ["speech.mp3", "ai_video.mp4"]:
             if os.path.exists(f):
                 os.remove(f)
 
