@@ -1,5 +1,7 @@
 discord.py
-moviepy
 gtts
+moviepy==2.0.0
+imageio[ffmpeg]
+numpy
 requests
-aiohttp
+python-dotenv
