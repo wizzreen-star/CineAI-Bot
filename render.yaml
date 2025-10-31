@@ -2,7 +2,7 @@ services:
   - type: web
     name: cineai-bot
     runtime: python
-    pythonVersion: 3.11.9
+    pythonVersion: 3.11.9        # 👈 change this line
     buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
     startCommand: "python3 bot.py"
     envVars:
