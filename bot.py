@@ -1,83 +1,111 @@
-import os, json, discord
+import os
+import discord
 from discord.ext import commands
 import google.generativeai as genai
-from moviepy.editor import TextClip, CompositeVideoClip, ColorClip
-from google.oauth2 import service_account
+from flask import Flask
+import threading
+import json
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# Discord setup
+# ===============================
+# 🔧 Load Environment Variables
+# ===============================
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET")  # (optional future use)
+
+if GEMINI_API_KEY:
+    print("✅ GEMINI_API_KEY loaded successfully.")
+else:
+    print("❌ GEMINI_API_KEY not found in environment variables!")
+
+if DISCORD_TOKEN:
+    print("✅ DISCORD_TOKEN loaded successfully.")
+else:
+    print("❌ DISCORD_TOKEN not found in environment variables!")
+
+# ===============================
+# 🤖 Setup Discord Bot
+# ===============================
 intents = discord.Intents.default()
 intents.message_content = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Gemini setup
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+# ===============================
+# 💬 Gemini Text Generator
+# ===============================
+genai.configure(api_key=GEMINI_API_KEY)
 
-# YouTube setup
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+@bot.event
+async def on_ready():
+    print(f"🤖 Logged in as {bot.user}")
 
-def get_youtube_service():
-    creds_json = json.loads(os.getenv("YOUTUBE_SERVICE_ACCOUNT"))
-    creds = service_account.Credentials.from_service_account_info(creds_json, scopes=SCOPES)
-    return build("youtube", "v3", credentials=creds)
-
-# Create simple text video
-def create_video(text, filename="/tmp/video.mp4"):
-    clip = TextClip(text, fontsize=60, color="white", size=(1280,720), method="caption").set_duration(10)
-    bg = ColorClip(size=(1280,720), color=(0,0,0)).set_duration(10)
-    final = CompositeVideoClip([bg, clip.set_position("center")])
-    final.write_videofile(filename, fps=24, codec="libx264", audio=False)
-    return filename
-
-# Discord command
 @bot.command()
-async def upload(ctx, *, prompt: str):
-    await ctx.send(f"🎬 Creating a YouTube video for: **{prompt}** ...")
+async def idea(ctx, *, prompt: str):
+    """Generate a video idea using Gemini"""
+    await ctx.send(f"💡 Thinking of an idea for: **{prompt}** ...")
 
     try:
-        # Gemini idea
         model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(f"Write a 1-sentence viral video script about: {prompt}")
-        script = response.text.strip()
+        response = model.generate_content(prompt)
+        idea_text = response.text.strip()
 
-        await ctx.send(f"💡 Gemini idea:\n> {script}")
+        await ctx.send(f"🎬 **CineAI Idea:**\n{idea_text}")
 
-        # Make video
-        video_path = create_video(script)
-
-        # Upload to YouTube
-        youtube = get_youtube_service()
-        request_body = {
-            "snippet": {
-                "categoryId": "22",
-                "title": prompt.title(),
-                "description": script,
-                "tags": ["AI", "Gemini", "AutoUpload"]
-            },
-            "status": {"privacyStatus": "unlisted"}
-        }
-
-        media = MediaFileUpload(video_path, mimetype="video/mp4", resumable=True)
-        upload = youtube.videos().insert(part="snippet,status", body=request_body, media_body=media)
-        response = upload.execute()
-
-        youtube_link = f"https://youtu.be/{response['id']}"
-        await ctx.send(f"✅ Uploaded!\n{youtube_link}")
+        # Optionally save for auto YouTube upload
+        with open("video_idea.txt", "w") as f:
+            f.write(idea_text)
 
     except Exception as e:
-        await ctx.send(f"⚠️ Error: {e}")
+        await ctx.send(f"⚠️ Gemini Error: {e}")
 
-bot.run(os.getenv("DISCORD_TOKEN"))
-from flask import Flask
-import os
+# ===============================
+# 📤 Auto Upload to YouTube (optional)
+# ===============================
+def upload_to_youtube(title, description, file_path):
+    try:
+        # This needs OAuth setup; for now placeholder logic
+        youtube = build("youtube", "v3", developerKey=os.getenv("YOUTUBE_API_KEY"))
+        request = youtube.videos().insert(
+            part="snippet,status",
+            body={
+                "snippet": {
+                    "title": title,
+                    "description": description,
+                    "tags": ["CineAI", "AI Video", "Gemini Bot"],
+                    "categoryId": "22"
+                },
+                "status": {"privacyStatus": "public"},
+            },
+            media_body=MediaFileUpload(file_path)
+        )
+        response = request.execute()
+        print(f"✅ Uploaded video: {response['id']}")
+    except Exception as e:
+        print(f"❌ YouTube upload failed: {e}")
 
+# ===============================
+# 🌐 Flask Server (for Render)
+# ===============================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is running!"
+    return "🚀 CineAI Bot is running perfectly on Render!"
 
-if __name__ == '__main__':
+def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=port)
+
+# Run Flask in background
+threading.Thread(target=run_flask).start()
+
+# ===============================
+# ▶️ Start Discord Bot
+# ===============================
+if DISCORD_TOKEN:
+    bot.run(DISCORD_TOKEN)
+else:
+    print("❌ DISCORD_TOKEN missing — bot not started.")
