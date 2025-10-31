@@ -1,14 +1,17 @@
 import os
 import discord
-import requests
 from discord.ext import commands
+import google.generativeai as genai
 
-# --- Environment Variables ---
+# --- Load environment variables ---
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-HF_API_KEY = os.getenv("HF_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# --- Bot Setup ---
+# --- Configure Gemini ---
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-1.5-pro")
+
+# --- Discord Bot setup ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -19,55 +22,25 @@ async def on_ready():
 
 @bot.command()
 async def hello(ctx):
-    await ctx.send("👋 Hello! I’m CineAI — your AI movie assistant bot!")
-
-@bot.command()
-async def idea(ctx, *, topic: str):
-    """Use Gemini to generate a creative video idea"""
-    await ctx.send(f"🧠 Thinking of a movie idea for: **{topic}** ... please wait ⏳")
-
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
-        headers = {"Content-Type": "application/json"}
-        payload = {
-            "contents": [
-                {"parts": [{"text": f"Create a cinematic short film idea about {topic}."}]}
-            ]
-        }
-
-        response = requests.post(url, headers=headers, json=payload)
-        result = response.json()
-        idea_text = result["candidates"][0]["content"]["parts"][0]["text"]
-
-        await ctx.send(f"🎬 **Idea:** {idea_text}")
-
-    except Exception as e:
-        await ctx.send(f"❌ Failed to generate idea: {e}")
+    await ctx.send("👋 Hello! I’m CineAI — now powered by Gemini AI!")
 
 @bot.command()
 async def video(ctx, *, prompt: str):
-    """Generate AI video using Hugging Face"""
-    await ctx.send(f"🎬 Generating video for: **{prompt}** ... please wait ⏳")
-
-    url = "https://api-inference.huggingface.co/models/ali-vilab/text-to-video-ms-1.7b"
-    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
-    payload = {"inputs": prompt}
+    """Generate AI video script or idea with Gemini"""
+    await ctx.send(f"🎬 Creating concept for: **{prompt}** ... please wait ⏳")
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=600)
-        if response.status_code == 200:
-            video_bytes = response.content
-            filename = "ai_video.mp4"
-            with open(filename, "wb") as f:
-                f.write(video_bytes)
-            await ctx.send(file=discord.File(filename))
-        else:
-            await ctx.send(f"⚠️ API error ({response.status_code}): {response.text[:200]}")
+        response = model.generate_content(
+            f"Create a detailed video scene description for: {prompt}. "
+            f"Include camera angles, transitions, and visuals."
+        )
+        result = response.text
+        await ctx.send(f"🎞️ **Gemini video concept:**\n{result[:1900]}")  # limit to Discord message size
     except Exception as e:
-        await ctx.send(f"❌ Failed to generate video: {e}")
+        await ctx.send(f"⚠️ Gemini API error: {e}")
 
-# --- Run Bot ---
+# --- Run bot ---
 if not DISCORD_TOKEN:
-    print("❌ ERROR: DISCORD_TOKEN not found.")
+    print("❌ ERROR: DISCORD_TOKEN missing.")
 else:
     bot.run(DISCORD_TOKEN)
