@@ -1,84 +1,88 @@
-# bot.py
+# ================================================================
+# 🎬 CineAI Discord Bot — Auto Video Maker (Gemini + Real Video)
+# ================================================================
+
 import os
+import asyncio
 from threading import Thread
 from flask import Flask, Response
-from discord.ext import commands
 import discord
+from discord.ext import commands
+
+# Import your VideoMaker class
 from video_maker import VideoMaker
 
-# -----------------------
-# Config (set in Render)
-# -----------------------
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")         # required
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")       # required for Gemini features (text/images/tts)
-PORT = int(os.environ.get("PORT", 10000))
+# -------------------
+# Configuration
+# -------------------
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-if not DISCORD_TOKEN:
-    print("❌ ERROR: set DISCORD_TOKEN in environment variables.")
-if not GEMINI_API_KEY:
-    print("⚠️ Warning: GEMINI_API_KEY not set — the bot will use fallbacks for images/tts.")
+# -------------------
+# Flask (for Render uptime)
+# -------------------
+app = Flask("cineai")
 
-# -----------------------
-# Discord bot
-# -----------------------
+@app.route("/")
+def index():
+    return Response("✅ CineAI bot running!", mimetype="text/plain")
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+# -------------------
+# Discord Bot Setup
+# -------------------
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# Initialize video maker
 video_maker = VideoMaker(gemini_api_key=GEMINI_API_KEY)
 
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user} (id={bot.user.id}) — CineAI ready.")
+    print(f"✅ Logged in as {bot.user} — ready to create real videos!")
 
 @bot.command(name="hello")
 async def hello(ctx):
-    await ctx.send("👋 Hello! I’m CineAI — send `!video <prompt>` to generate a short AI video.")
+    await ctx.send("👋 Hey! I’m CineAI — I make real AI videos using Gemini!")
 
 @bot.command(name="video")
-async def video_cmd(ctx, *, prompt: str):
-    """
-    Usage: !video <prompt>
-    Example: !video a dog running on a beach at sunset
-    """
-    # notify user
-    await ctx.send(f"🎬 Generating a video for: **{prompt}** — this may take 30s–5m depending on resources.")
+async def make_video(ctx, *, prompt: str):
+    """Generate a real AI video using Gemini."""
+    await ctx.send(f"🎬 Generating a video for: **{prompt}** — please wait...")
 
-    # create video using VideoMaker (runs heavy work in background threads)
     try:
-        out_path = await video_maker.make_video_for_prompt(prompt, notify_func=lambda s: ctx.send(s))
-    except Exception as e:
-        await ctx.send(f"❌ Failed to generate video: {e}")
-        return
+        video_path = await video_maker.make_video_for_prompt(
+            prompt,
+            notify_func=lambda s: asyncio.create_task(ctx.send(s))
+        )
 
-    # send the final video (if not larger than discord limit)
-    try:
-        size_mb = os.path.getsize(out_path) / (1024 * 1024)
-        if size_mb < 24:
-            await ctx.send(file=discord.File(out_path))
+        # Try sending the video file
+        if os.path.exists(video_path):
+            size_mb = os.path.getsize(video_path) / (1024 * 1024)
+            if size_mb < 24:
+                await ctx.send(file=discord.File(video_path))
+            else:
+                await ctx.send(f"✅ Video created ({size_mb:.1f} MB) — too large for Discord, saved at `{video_path}`.")
         else:
-            await ctx.send(f"✅ Video created: `{out_path}` ({size_mb:.1f} MB). It's available on the server.")
+            await ctx.send("❌ Failed: no video file was generated.")
+
     except Exception as e:
-        await ctx.send(f"✅ Video created but failed to upload to Discord: {e}\nSaved at `{out_path}`")
+        await ctx.send(f"❌ Error: {e}")
+        print("Video generation error:", e)
 
-# -----------------------
-# Flask health endpoint for Render
-# -----------------------
-app = Flask("cineai")
-@app.route("/")
-def index():
-    return Response("CineAI bot running", mimetype="text/plain")
-
-def run_flask():
-    app.run(host="0.0.0.0", port=PORT)
-
+# -------------------
+# Start Flask + Discord
+# -------------------
 def run_discord():
     if not DISCORD_TOKEN:
-        print("❌ No DISCORD_TOKEN; exiting bot.")
+        print("❌ Missing DISCORD_TOKEN in environment!")
         return
     bot.run(DISCORD_TOKEN)
 
 if __name__ == "__main__":
-    # start Flask so Render sees a web service
     Thread(target=run_flask, daemon=True).start()
     run_discord()
