@@ -1,5 +1,5 @@
 # ================================================================
-# 🎬 CineAI Discord Bot — Auto Video Maker (Gemini + Real Video)
+# 🎬 CineAI Discord Bot — Auto Video Maker (Gemini + gTTS + MoviePy)
 # ================================================================
 
 import os
@@ -8,20 +8,18 @@ from threading import Thread
 from flask import Flask, Response
 import discord
 from discord.ext import commands
-
-# Import your VideoMaker class
 from video_maker import VideoMaker
 
 # -------------------
-# Configuration
+# Load API keys
 # -------------------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # -------------------
-# Flask (for Render uptime)
+# Flask for Render keep-alive
 # -------------------
-app = Flask("cineai")
+app = Flask(__name__)
 
 @app.route("/")
 def index():
@@ -38,48 +36,44 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Initialize video maker
 video_maker = VideoMaker(gemini_api_key=GEMINI_API_KEY)
 
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user} — ready to create real videos!")
+    print(f"✅ Logged in as {bot.user} — ready to create videos!")
 
 @bot.command(name="hello")
 async def hello(ctx):
-    await ctx.send("👋 Hey! I’m CineAI — I make real AI videos using Gemini!")
+    await ctx.send("👋 Hey! I’m CineAI — I can make real AI videos from your ideas!")
 
 @bot.command(name="video")
-async def make_video(ctx, *, prompt: str):
-    """Generate a real AI video using Gemini."""
-    await ctx.send(f"🎬 Generating a video for: **{prompt}** — please wait...")
+async def video(ctx, *, prompt: str):
+    """Create an AI-generated video based on your text prompt."""
+    await ctx.send(f"🎬 Generating a **real AI video** for: **{prompt}** — please wait...")
 
     try:
-        video_path = await video_maker.make_video_for_prompt(
-            prompt,
-            notify_func=lambda s: asyncio.create_task(ctx.send(s))
-        )
+        # make_video() is the correct function name
+        output_path = await asyncio.to_thread(video_maker.make_video, prompt)
 
-        # Try sending the video file
-        if os.path.exists(video_path):
-            size_mb = os.path.getsize(video_path) / (1024 * 1024)
-            if size_mb < 24:
-                await ctx.send(file=discord.File(video_path))
-            else:
-                await ctx.send(f"✅ Video created ({size_mb:.1f} MB) — too large for Discord, saved at `{video_path}`.")
+        if not os.path.exists(output_path):
+            await ctx.send("❌ Error: video file not found.")
+            return
+
+        size_mb = os.path.getsize(output_path) / (1024 * 1024)
+        if size_mb < 24:
+            await ctx.send(file=discord.File(output_path))
         else:
-            await ctx.send("❌ Failed: no video file was generated.")
+            await ctx.send(f"✅ Video created ({size_mb:.1f} MB). Too large to upload but saved at: `{output_path}`")
 
     except Exception as e:
         await ctx.send(f"❌ Error: {e}")
-        print("Video generation error:", e)
 
 # -------------------
-# Start Flask + Discord
+# Start both Flask + Discord
 # -------------------
 def run_discord():
     if not DISCORD_TOKEN:
-        print("❌ Missing DISCORD_TOKEN in environment!")
+        print("❌ ERROR: DISCORD_TOKEN not found in environment!")
         return
     bot.run(DISCORD_TOKEN)
 
