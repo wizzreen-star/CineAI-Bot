@@ -1,122 +1,117 @@
-# video_maker.py
 import os
-import random
 import tempfile
-from io import BytesIO
-import requests
-from moviepy.editor import *
+import random
+from PIL import Image, ImageDraw, ImageFont
 from gtts import gTTS
-from PIL import Image
+from moviepy.editor import *
+import google.generativeai as genai
 
+# -----------------------------
+# CONFIG
+# -----------------------------
 class VideoMaker:
     def __init__(self, gemini_api_key=None):
-        self.gemini_api_key = gemini_api_key
+        if gemini_api_key:
+            genai.configure(api_key=gemini_api_key)
+            self.model = genai.GenerativeModel("gemini-1.5-flash")
+        else:
+            self.model = None
 
-    async def make_video(self, prompt, notify_func=None):
-        """Generate cinematic AI-style video with real visuals + TTS narration."""
-        if notify_func:
-            await notify_func("✍️ Writing script...")
+    # ----------------------------------
+    # Generate script using Gemini
+    # ----------------------------------
+    def generate_script(self, topic: str):
+        if not self.model:
+            return f"Video about {topic}. AI video demo."
 
-        # Generate simple narration
-        script = f"This video explores {prompt}. Let's learn something amazing about it."
+        prompt = f"Write a short 6-line video narration about {topic}, suitable for AI narration."
+        try:
+            response = self.model.generate_content(prompt)
+            text = response.text.strip()
+            if not text:
+                raise ValueError("Empty response from Gemini")
+            return text
+        except Exception as e:
+            print(f"⚠️ Script generation failed: {e}")
+            return f"AI could not generate script for {topic}. Please try again."
 
-        if notify_func:
-            await notify_func("🎙️ Generating voice narration...")
+    # ----------------------------------
+    # Create simple background image (placeholder)
+    # ----------------------------------
+    def create_image(self, text, output_path):
+        # Use LANCZOS instead of ANTIALIAS
+        if hasattr(Image, "Resampling"):
+            resample_filter = Image.Resampling.LANCZOS
+        elif hasattr(Image, "LANCZOS"):
+            resample_filter = Image.LANCZOS
+        else:
+            resample_filter = Image.BICUBIC
 
-        # Voice synthesis
-        tts = gTTS(script)
-        voice_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-        tts.save(voice_path)
-
-        if notify_func:
-            await notify_func("🖼️ Fetching visuals...")
-
-        # Try to get images from Unsplash
-        keywords = [w for w in prompt.split() if len(w) > 2]
-        random.shuffle(keywords)
-        if not keywords:
-            keywords = ["nature", "sky", "abstract"]
-
-        images = []
-        for word in keywords[:5]:
-            try:
-                url = f"https://source.unsplash.com/1280x720/?{word}"
-                resp = requests.get(url, timeout=10)
-                resp.raise_for_status()
-                img = Image.open(BytesIO(resp.content)).convert("RGB")
-
-                # ✅ FIX for Pillow 10+: universal resampling
-                if hasattr(Image, "Resampling"):
-                    resample_filter = Image.Resampling.LANCZOS
-                elif hasattr(Image, "LANCZOS"):
-                    resample_filter = Image.LANCZOS
-                else:
-                    resample_filter = Image.BICUBIC
-
-                img = img.resize((1280, 720), resample=resample_filter)
-                path = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg").name
-                img.save(path, format="JPEG", quality=90)
-                images.append(path)
-            except Exception as e:
-                print(f"⚠️ Image download failed for '{word}': {e}")
-
-        # ✅ Fallback to a gradient if Unsplash fails
-        if not images:
-            if notify_func:
-                await notify_func("⚠️ No images found, using gradient background.")
-            gradient = ColorClip(size=(1280, 720), color=(30, 30, 40)).set_duration(2)
-            path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-            gradient.write_videofile(path, fps=24)
-            images = [None]
-
-        if notify_func:
-            await notify_func("🎬 Building your video...")
-
-        # Combine visuals + audio
-        audio_clip = AudioFileClip(voice_path)
-        duration = audio_clip.duration
-        per_image = duration / len(images)
-
-        clips = []
-        for img in images:
-            if img:
-                base = ImageClip(img).set_duration(per_image)
-            else:
-                base = ColorClip(size=(1280, 720), color=(0, 0, 0)).set_duration(per_image)
-
-            zoomed = base.resize(lambda t: 1 + 0.05 * (t / per_image))
-
-            text_clip = TextClip(
-                txt=prompt,
-                fontsize=48,
-                color="white",
-                font="DejaVu-Sans",
-                stroke_color="black",
-                stroke_width=2,
-                method="caption",
-                size=(1100, None)
-            ).set_position(("center", "bottom")).set_duration(per_image)
-
-            clips.append(CompositeVideoClip([zoomed, text_clip], size=(1280, 720)))
-
-        final = concatenate_videoclips(clips, method="compose").set_audio(audio_clip).set_fps(24)
-        output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-        final.write_videofile(
-            output_path,
-            codec="libx264",
-            audio_codec="aac",
-            fps=24,
-            threads=4,
-            verbose=False,
-            logger=None
-        )
-
-        if notify_func:
-            await notify_func("✅ Video generated successfully!")
+        # Background
+        img = Image.new("RGB", (1280, 720), color=(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)))
+        draw = ImageDraw.Draw(img)
 
         try:
-            audio_clip.close()
+            font = ImageFont.truetype("arial.ttf", 60)
         except:
-            pass
+            font = ImageFont.load_default()
 
-        return output_path
+        # Text placement
+        lines = text.split("\n")
+        y_text = 300
+        for line in lines:
+            w, h = draw.textsize(line, font=font)
+            draw.text(((1280 - w) / 2, y_text), line, font=font, fill="white")
+            y_text += h + 10
+
+        img.save(output_path)
+
+    # ----------------------------------
+    # Main function: generate video
+    # ----------------------------------
+    def make_video_for_prompt(self, prompt, notify_func=None):
+        try:
+            if notify_func:
+                notify_func("✍️ Writing script...")
+            script = self.generate_script(prompt)
+
+            if notify_func:
+                notify_func("🎙️ Generating voice...")
+            tts = gTTS(script)
+            audio_path = tempfile.mktemp(suffix=".mp3")
+            tts.save(audio_path)
+
+            # Split script lines into images
+            if notify_func:
+                notify_func("🖼️ Creating images...")
+
+            temp_dir = tempfile.mkdtemp()
+            slides = []
+            for i, line in enumerate(script.split("\n")):
+                if not line.strip():
+                    continue
+                img_path = os.path.join(temp_dir, f"slide_{i}.jpg")
+                self.create_image(line, img_path)
+                clip = ImageClip(img_path, duration=4)
+                slides.append(clip)
+
+            if not slides:
+                raise ValueError("⚠️ No slides generated.")
+
+            final_clip = concatenate_videoclips(slides, method="compose")
+            audio_clip = AudioFileClip(audio_path)
+            final_clip = final_clip.set_audio(audio_clip)
+
+            # Export final video
+            output_path = tempfile.mktemp(suffix=".mp4")
+            final_clip.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
+
+            if notify_func:
+                notify_func("✅ Video generated successfully!")
+            return output_path
+
+        except Exception as e:
+            print(f"❌ Error while generating video: {e}")
+            if notify_func:
+                notify_func(f"❌ Failed to generate video: {e}")
+            return None
