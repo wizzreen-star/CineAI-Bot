@@ -13,17 +13,17 @@ class VideoMaker:
         self.gemini_api_key = gemini_api_key
 
     async def make_video(self, prompt, notify_func=None):
-        """Generate a REAL AI video with image backgrounds + voice + text."""
+        """Generate a REAL AI video with image backgrounds, zoom animation, and voice narration."""
 
         if notify_func:
             await notify_func("✍️ Writing script...")
 
-        script = f"This video explores {prompt}. Let's dive into how it is shaping our world today."
+        script = f"This video explores {prompt}. Let's discover how it impacts our world today."
 
         if notify_func:
             await notify_func("🎙️ Generating voice narration...")
 
-        # Generate TTS narration
+        # Generate voice
         tts = gTTS(script)
         voice_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
         tts.save(voice_path)
@@ -31,7 +31,7 @@ class VideoMaker:
         if notify_func:
             await notify_func("🖼️ Downloading background visuals...")
 
-        # Download random topic-related images
+        # Download 4 random related images from Unsplash
         keywords = prompt.split()
         random.shuffle(keywords)
         images = []
@@ -62,16 +62,17 @@ class VideoMaker:
         per_image = duration / len(images)
 
         clips = []
-        for i, img_path in enumerate(images):
+        for img_path in images:
             if img_path:
-                img_clip = ImageClip(img_path).set_duration(per_image)
+                base_clip = ImageClip(img_path).set_duration(per_image)
             else:
-                img_clip = ColorClip(size=(1280, 720), color=(0, 0, 0)).set_duration(per_image)
+                base_clip = ColorClip(size=(1280, 720), color=(0, 0, 0)).set_duration(per_image)
 
-            # Add subtle zoom-in effect
-            img_clip = img_clip.fx(vfx.zoom_in, 1.05)
+            # Add smooth zoom-in (manual)
+            zoomed = base_clip.fl_time(lambda t: t)
+            zoomed = zoomed.resize(lambda t: 1 + 0.02 * t)  # 2% zoom per second
 
-            # Overlay caption text
+            # Add text overlay
             text_clip = TextClip(
                 txt=prompt,
                 fontsize=48,
@@ -83,20 +84,21 @@ class VideoMaker:
                 method='caption'
             ).set_position(('center', 'bottom')).set_duration(per_image)
 
-            final_frame = CompositeVideoClip([img_clip, text_clip])
-            clips.append(final_frame)
+            frame = CompositeVideoClip([zoomed, text_clip])
+            clips.append(frame)
 
-        video = concatenate_videoclips(clips, method="compose")
-        final_video = video.set_audio(audio_clip)
+        final = concatenate_videoclips(clips, method="compose").set_audio(audio_clip)
 
         output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-        final_video.write_videofile(
+        final.write_videofile(
             output_path,
             fps=24,
             codec="libx264",
             audio_codec="aac",
             threads=4,
-            preset="medium"
+            preset="medium",
+            verbose=False,
+            logger=None
         )
 
         if notify_func:
