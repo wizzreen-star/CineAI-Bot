@@ -1,12 +1,11 @@
 import os
-import random
 import tempfile
-import requests
+import uuid
+import random
 import textwrap
 from pathlib import Path
-from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
 from gtts import gTTS
+from PIL import Image, ImageDraw, ImageFont
 import moviepy.editor as mp
 
 try:
@@ -18,95 +17,152 @@ except Exception:
 
 class VideoMaker:
     def __init__(self, gemini_api_key=None):
-        self.have_gemini = HAVE_GEMINI and gemini_api_key
-        if self.have_gemini:
+        self.gemini_api_key = gemini_api_key
+        if HAVE_GEMINI and gemini_api_key:
             try:
                 genai.configure(api_key=gemini_api_key)
+                self.model = genai.GenerativeModel("gemini-1.5-flash")
             except Exception as e:
-                print("⚠️ Gemini setup failed:", e)
-                self.have_gemini = False
+                print("⚠️ Gemini init failed:", e)
+                self.model = None
+        else:
+            self.model = None
 
-        self.font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        self.video_dir = Path("videos")
-        self.video_dir.mkdir(exist_ok=True)
+        self.output_dir = Path("videos")
+        self.output_dir.mkdir(exist_ok=True)
 
-    # -------------------------
-    # 1️⃣ Generate script text
-    # -------------------------
+    # ---------------------------------------------------------
+    # 🎬 Main Video Creation
+    # ---------------------------------------------------------
+    def make_video(self, prompt: str, notify_func=None, lang="en"):
+        """Create a narrated slideshow video with AI script."""
+        try:
+            if notify_func:
+                notify_func("✍️ Writing script...")
+
+            script = self.generate_script(prompt)
+
+            if notify_func:
+                notify_func("🎙️ Generating narration...")
+
+            audio_path = self.text_to_speech(script, lang)
+
+            if notify_func:
+                notify_func("🖼️ Generating visuals...")
+
+            video_path = self.build_video(script, audio_path)
+
+            if notify_func:
+                notify_func("🎞️ Combining video...")
+
+            return video_path
+        except Exception as e:
+            print("❌ make_video error:", e)
+            raise
+
+    # ---------------------------------------------------------
+    # 🧠 AI Script Generation
+    # ---------------------------------------------------------
     def generate_script(self, prompt: str) -> str:
-        if self.have_gemini:
+        if self.model:
             try:
-                response = genai.GenerativeModel("gemini-pro").generate_content(
-                    f"Write a short video narration (about 60 seconds) for this topic: {prompt}. "
-                    "Make it sound natural and engaging."
+                response = self.model.generate_content(
+                    f"Write a short, engaging 1-minute video narration about: {prompt}."
                 )
-                if hasattr(response, "text"):
-                    return response.text.strip()
+                return response.text.strip()
             except Exception as e:
-                print("⚠️ Gemini script failed:", e)
+                print("⚠️ Gemini generation failed:", e)
 
-        return f"This is a short explainer video about {prompt}. Let's explore it step by step!"
+        # fallback
+        return (
+            f"🎬 Title: {prompt}\n\n"
+            "Scene 1: Introduction to the topic.\n"
+            "Scene 2: Key insights or main idea.\n"
+            "Scene 3: Real world example.\n"
+            "Scene 4: Conclusion and takeaway.\n"
+        )
 
-    # -------------------------
-    # 2️⃣ Download related image
-    # -------------------------
-    def fetch_image(self, prompt):
-        try:
-            url = f"https://source.unsplash.com/1280x720/?{prompt.replace(' ', ',')}"
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                return Image.open(BytesIO(resp.content)).convert("RGB")
-        except Exception as e:
-            print("⚠️ Image fetch failed:", e)
-        return None
+    # ---------------------------------------------------------
+    # 🗣️ Text → Speech
+    # ---------------------------------------------------------
+    def text_to_speech(self, text, lang="en") -> str:
+        temp_path = self.output_dir / f"{uuid.uuid4().hex}.mp3"
+        tts = gTTS(text, lang=lang)
+        tts.save(str(temp_path))
+        return temp_path
 
-    # -------------------------
-    # 3️⃣ Build the video
-    # -------------------------
-    def make_video_for_prompt(self, prompt, notify_func=None):
-        if notify_func:
-            notify_func("✍️ Writing script...")
+    # ---------------------------------------------------------
+    # 🖼️ Create Visual Slides
+    # ---------------------------------------------------------
+    def build_video(self, script: str, audio_path: str) -> str:
+        audio_clip = mp.AudioFileClip(str(audio_path))
+        duration = audio_clip.duration
 
-        script = self.generate_script(prompt)
-        if notify_func:
-            notify_func("🎙️ Generating voice...")
+        # Split text into segments
+        slides = self.split_text(script)
+        per_slide = duration / max(len(slides), 1)
+        clips = []
 
-        # Generate TTS audio
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_audio:
-            gTTS(script).save(tmp_audio.name)
-            audio_path = tmp_audio.name
+        for line in slides:
+            img = self.create_image(line)
+            img_path = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+            img.save(img_path)
+            clip = mp.ImageClip(img_path).set_duration(per_slide)
+            clips.append(clip)
 
-        # Generate slide images
-        if notify_func:
-            notify_func("🖼️ Creating visuals...")
+        final_clip = mp.concatenate_videoclips(clips, method="compose")
+        final_clip = final_clip.set_audio(audio_clip)
+        final_clip = final_clip.set_fps(24)
 
-        base_img = self.fetch_image(prompt)
-        if base_img is None:
-            base_img = Image.new("RGB", (1280, 720), color=(0, 0, 0))
-            print("⚠️ No image found, using black background")
+        output_path = self.output_dir / f"{uuid.uuid4().hex}.mp4"
+        final_clip.write_videofile(
+            str(output_path),
+            codec="libx264",
+            audio_codec="aac",
+            verbose=False,
+            logger=None
+        )
 
-        font = ImageFont.truetype(self.font_path, 48) if os.path.exists(self.font_path) else ImageFont.load_default()
-        draw = ImageDraw.Draw(base_img)
-        wrapped = textwrap.fill(prompt.upper(), width=18)
-        text_w, text_h = draw.textbbox((0, 0), wrapped, font=font)[2:]
-        draw.text(((1280 - text_w) / 2, (720 - text_h) / 2), wrapped, fill=(255, 255, 255), font=font)
+        audio_clip.close()
+        return str(output_path)
 
-        # Save frame
-        frame_path = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
-        base_img.save(frame_path)
+    # ---------------------------------------------------------
+    # 🧩 Helpers
+    # ---------------------------------------------------------
+    def split_text(self, text: str, width=70):
+        lines = []
+        for p in text.split("\n"):
+            p = p.strip()
+            if not p:
+                continue
+            lines.extend(textwrap.wrap(p, width=width))
+        return lines
 
-        # Combine with audio into video
-        if notify_func:
-            notify_func("🎞️ Building video...")
+    def create_image(self, text: str, size=(1280, 720)):
+        """Create a slide with real background and text overlay."""
+        W, H = size
+        # choose random color background
+        bg_color = random.choice(
+            [(20, 30, 60), (60, 20, 30), (30, 60, 20), (50, 50, 50)]
+        )
+        img = Image.new("RGB", size, color=bg_color)
+        draw = ImageDraw.Draw(img)
 
-        try:
-            img_clip = mp.ImageClip(frame_path).set_duration(10)
-            audio_clip = mp.AudioFileClip(audio_path)
-            final = img_clip.set_audio(audio_clip).set_fps(24)
+        font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        font = (
+            ImageFont.truetype(font_path, 42)
+            if os.path.exists(font_path)
+            else ImageFont.load_default()
+        )
 
-            output_path = self.video_dir / f"{prompt.replace(' ', '_')[:20]}_{random.randint(1000,9999)}.mp4"
-            final.write_videofile(str(output_path), codec="libx264", audio_codec="aac", verbose=False, logger=None)
-            return output_path
-        except Exception as e:
-            print("❌ Failed video build:", e)
-            return None
+        wrapped = textwrap.wrap(text, width=40)
+        total_height = sum(draw.textbbox((0, 0), line, font=font)[3] for line in wrapped)
+        y = (H - total_height) // 2
+
+        for line in wrapped:
+            bbox = draw.textbbox((0, 0), line, font=font)
+            w = bbox[2] - bbox[0]
+            draw.text(((W - w) / 2, y), line, font=font, fill=(255, 255, 255))
+            y += bbox[3] - bbox[1] + 10
+
+        return img
