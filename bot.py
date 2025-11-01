@@ -1,22 +1,17 @@
 # ================================================================
-# 🎬 CineAI Discord Bot — Auto Video Maker (Text ➜ Speech ➜ Video)
+# 🤖 CineAI Discord Bot — Uses Gemini + video_maker
 # ================================================================
 
 import os
 import asyncio
-import uuid
-import textwrap
-from pathlib import Path
 from threading import Thread
-
+from pathlib import Path
+from flask import Flask, Response
 import discord
 from discord.ext import commands
-from gtts import gTTS
-from PIL import Image, ImageDraw, ImageFont
-import moviepy.editor as mp
-from flask import Flask, Response
+from video_maker import build_video  # Import from your new file
 
-# Optional: Use Gemini for script generation
+# Optional Gemini AI
 try:
     import google.generativeai as genai
     HAVE_GEMINI = True
@@ -28,12 +23,6 @@ except Exception:
 # -------------------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-if not DISCORD_TOKEN:
-    raise ValueError("❌ Missing DISCORD_TOKEN in environment!")
-
-VIDEO_DIR = Path("videos")
-VIDEO_DIR.mkdir(exist_ok=True)
 
 # -------------------
 # Discord Setup
@@ -51,56 +40,84 @@ if HAVE_GEMINI and GEMINI_API_KEY:
 
 
 # -------------------
-# Script Generator
+# Script Generation
 # -------------------
 def generate_script(prompt: str) -> str:
-    """Generate video narration text."""
     if HAVE_GEMINI and GEMINI_API_KEY:
         try:
-            model = genai.GenerativeModel("gemini-pro")
-            response = model.generate_content(
-                f"Write a short engaging 1-minute video script about: {prompt}. Keep it natural, human-like, and conversational."
+            response = genai.GenerativeModel("gemini-pro").generate_content(
+                f"Write a 1-minute video narration about: {prompt}. "
+                "Make it friendly, simple, and engaging."
             )
             if hasattr(response, "text") and response.text:
                 return response.text.strip()
         except Exception as e:
-            print("⚠️ Gemini failed, using fallback:", e)
+            print("⚠️ Gemini failed:", e)
 
-    # fallback script
     return (
         f"🎬 Title: {prompt}\n\n"
-        "Scene 1: Quick introduction.\n"
-        "Scene 2: Key idea explained simply.\n"
-        "Scene 3: An example or comparison.\n"
-        "Scene 4: Final thoughts and summary.\n"
+        "Scene 1: Introduce the topic.\n"
+        "Scene 2: Explain its impact or story.\n"
+        "Scene 3: End with a short conclusion.\n"
     )
 
 
 # -------------------
-# Text → Image
+# Discord Commands
 # -------------------
-def split_text_into_segments(text: str):
-    """Split text for slides."""
-    lines = text.split("\n")
-    chunks = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        for chunk in textwrap.wrap(line, width=70):
-            chunks.append(chunk)
-    return chunks or ["(empty)"]
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user}")
 
-def create_image(text: str, size=(1280, 720)) -> Path:
-    """Create an image with centered text and return its path."""
-    W, H = size
-    img = Image.new("RGB", size, color=(15, 15, 15))
-    draw = ImageDraw.Draw(img)
 
-    # Load font safely
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    font = ImageFont.truetype(font_path, 42) if os.path.exists(font_path) else ImageFont.load_default()
+@bot.command(name="video")
+async def make_video(ctx, *, prompt: str):
+    await ctx.send(f"🎬 Generating a video for: **{prompt}** — please wait...")
 
+    try:
+        await ctx.send("✍️ Writing script...")
+        script = await asyncio.to_thread(generate_script, prompt)
+
+        await ctx.send("🎙️ Generating voice + visuals...")
+        video_path = await build_video(prompt, script)
+
+        # Upload or notify
+        size = video_path.stat().st_size / (1024 * 1024)
+        if size < 24:
+            await ctx.send(file=discord.File(str(video_path)))
+        else:
+            await ctx.send(f"✅ Video created ({size:.1f} MB). Too large to upload, saved at `{video_path}`.")
+
+    except Exception as e:
+        await ctx.send(f"❌ Failed to build video: {e}")
+
+
+# -------------------
+# Flask (for Render)
+# -------------------
+app = Flask("cineai")
+
+@app.route("/")
+def index():
+    return Response("✅ CineAI bot running!", mimetype="text/plain")
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+def run_discord():
+    if not DISCORD_TOKEN:
+        print("❌ ERROR: DISCORD_TOKEN not set.")
+        return
+    bot.run(DISCORD_TOKEN)
+
+
+# -------------------
+# Start Everything
+# -------------------
+if __name__ == "__main__":
+    Thread(target=run_flask, daemon=True).start()
+    run_discord()
     lines = textwrap.wrap(text, width=40)
     line_heights = [font.getbbox(line)[3] - font.getbbox(line)[1] for line in lines]
     total_h = sum(line_heights) + 10 * len(lines)
