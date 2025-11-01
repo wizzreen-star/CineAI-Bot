@@ -13,17 +13,17 @@ class VideoMaker:
         self.gemini_api_key = gemini_api_key
 
     async def make_video(self, prompt, notify_func=None):
-        """Generate cinematic AI-style video with visuals + TTS narration."""
+        """Generate cinematic AI-style video with real visuals + TTS narration."""
         if notify_func:
             await notify_func("✍️ Writing script...")
 
-        # Create narration text
+        # Generate simple narration
         script = f"This video explores {prompt}. Let's learn something amazing about it."
 
         if notify_func:
             await notify_func("🎙️ Generating voice narration...")
 
-        # Text-to-speech
+        # Voice synthesis
         tts = gTTS(script)
         voice_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
         tts.save(voice_path)
@@ -31,21 +31,21 @@ class VideoMaker:
         if notify_func:
             await notify_func("🖼️ Fetching visuals...")
 
-        # Get images from Unsplash
+        # Try to get images from Unsplash
         keywords = [w for w in prompt.split() if len(w) > 2]
         random.shuffle(keywords)
         if not keywords:
-            keywords = ["nature", "abstract", "sky"]
+            keywords = ["nature", "sky", "abstract"]
 
         images = []
-        for word in keywords[:4]:
+        for word in keywords[:5]:
             try:
                 url = f"https://source.unsplash.com/1280x720/?{word}"
                 resp = requests.get(url, timeout=10)
                 resp.raise_for_status()
                 img = Image.open(BytesIO(resp.content)).convert("RGB")
 
-                # ✅ UNIVERSAL RESIZE FIX (works for Pillow 8–11)
+                # ✅ FIX for Pillow 10+: universal resampling
                 if hasattr(Image, "Resampling"):
                     resample_filter = Image.Resampling.LANCZOS
                 elif hasattr(Image, "LANCZOS"):
@@ -58,16 +58,21 @@ class VideoMaker:
                 img.save(path, format="JPEG", quality=90)
                 images.append(path)
             except Exception as e:
-                print(f"⚠️ Image download failed for '{word}':", e)
+                print(f"⚠️ Image download failed for '{word}': {e}")
 
+        # ✅ Fallback to a gradient if Unsplash fails
         if not images:
             if notify_func:
-                await notify_func("⚠️ No images found, using black background.")
+                await notify_func("⚠️ No images found, using gradient background.")
+            gradient = ColorClip(size=(1280, 720), color=(30, 30, 40)).set_duration(2)
+            path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+            gradient.write_videofile(path, fps=24)
             images = [None]
 
         if notify_func:
             await notify_func("🎬 Building your video...")
 
+        # Combine visuals + audio
         audio_clip = AudioFileClip(voice_path)
         duration = audio_clip.duration
         per_image = duration / len(images)
@@ -79,12 +84,11 @@ class VideoMaker:
             else:
                 base = ColorClip(size=(1280, 720), color=(0, 0, 0)).set_duration(per_image)
 
-            # Smooth zoom effect
             zoomed = base.resize(lambda t: 1 + 0.05 * (t / per_image))
 
             text_clip = TextClip(
                 txt=prompt,
-                fontsize=50,
+                fontsize=48,
                 color="white",
                 font="DejaVu-Sans",
                 stroke_color="black",
