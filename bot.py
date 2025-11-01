@@ -67,14 +67,34 @@ def create_image_for_text(text):
         font = ImageFont.truetype("arial.ttf", 42)
     except:
         font = ImageFont.load_default()
-    wrapped = "\n".join(text[i:i+40] for i in range(0, len(text), 40))
-    draw.text((60, 280), wrapped, font=font, fill=(255, 255, 255))
+
+    # wrap text
+    max_width = 40
+    lines = [text[i:i+max_width] for i in range(0, len(text), max_width)]
+
+    # measure text height safely
+    line_heights = []
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        line_heights.append(bbox[3] - bbox[1])
+    total_h = sum(line_heights) + (10 * len(lines))
+    y = (720 - total_h) // 2
+
+    # draw text centered
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        x = (1280 - w) // 2
+        draw.text((x, y), line, font=font, fill=(255, 255, 255))
+        y += h + 10
+
     return img
 
 # === Generate script using Gemini ===
 async def generate_script(prompt: str) -> str:
     model = genai.GenerativeModel("gemini-1.5-flash")
-    response = model.generate_content(f"Write a short 60-second video script about: {prompt}")
+    response = model.generate_content(f"Write a 1-minute engaging video script about: {prompt}")
     return response.text.strip()
 
 # === Build the video ===
@@ -101,7 +121,7 @@ async def build_video_from_text(prompt: str, script_text: str, ctx) -> Path:
     image_clips = []
     for seg in segments:
         img = create_image_for_text(seg)
-        np_img = np.array(img)  # ✅ FIXED: Convert PIL → numpy
+        np_img = np.array(img)  # ✅ FIXED: Convert PIL → numpy array for MoviePy
         clip = mp.ImageClip(np_img).set_duration(per_segment_dur).resize(width=1280)
         image_clips.append(clip)
 
