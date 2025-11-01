@@ -1,83 +1,113 @@
-import os
-import tempfile
-from PIL import Image, ImageDraw, ImageFont
-from moviepy.editor import ImageClip, concatenate_videoclips, AudioFileClip
-import google.generativeai as genai
-import requests
-from io import BytesIO
-from gtts import gTTS
+# ================================================================
+# 🎨 VideoMaker Class — Creates AI Videos with Gemini, gTTS & MoviePy
+# ================================================================
 
+import os
+import uuid
+import textwrap
+from pathlib import Path
+from gtts import gTTS
+from PIL import Image, ImageDraw, ImageFont
+from moviepy.editor import ImageSequenceClip, AudioFileClip
+import tempfile
+import random
+
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
 
 class VideoMaker:
     def __init__(self, gemini_api_key=None):
-        self.gemini_api_key = gemini_api_key
-        if gemini_api_key:
-            genai.configure(api_key=gemini_api_key)
+        self.video_dir = Path("videos")
+        self.video_dir.mkdir(exist_ok=True)
 
-        self.font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        self.have_gemini = bool(gemini_api_key and genai)
+        if self.have_gemini:
+            try:
+                genai.configure(api_key=gemini_api_key)
+            except Exception as e:
+                print("⚠️ Gemini setup failed:", e)
+                self.have_gemini = False
 
-    # ✍️ Generate short AI narration
-    def generate_script(self, topic: str):
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        prompt = f"Write a short engaging video script (3–5 sentences) about: {topic}"
-        response = model.generate_content(prompt)
-        return response.text.strip()
+    # -------------------
+    # Generate Script
+    # -------------------
+    def generate_script(self, prompt: str) -> str:
+        if self.have_gemini:
+            try:
+                model = genai.GenerativeModel("gemini-pro")
+                response = model.generate_content(f"Write a detailed video narration script about: {prompt}. Include visuals, examples, and friendly tone.")
+                if response.text:
+                    return response.text.strip()
+            except Exception as e:
+                print("⚠️ Gemini failed:", e)
 
-    # 🖼️ Generate an image using Gemini
-    def generate_image(self, prompt: str):
-        try:
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            image_response = model.generate_content(f"Generate a realistic image of: {prompt}")
-            image_url = image_response.candidates[0].content.parts[0].text
+        return (
+            f"🎬 Title: {prompt}\n\n"
+            "Scene 1: Introduce the topic with excitement.\n"
+            "Scene 2: Explain the main concept clearly.\n"
+            "Scene 3: Give examples with a story.\n"
+            "Scene 4: End with an inspiring message.\n"
+        )
 
-            if image_url.startswith("http"):
-                img_data = requests.get(image_url).content
-                return Image.open(BytesIO(img_data)).convert("RGB")
+    # -------------------
+    # Generate Images
+    # -------------------
+    def create_image(self, text: str, size=(1280, 720)):
+        img = Image.new("RGB", size, color=(random.randint(0, 40), random.randint(0, 40), random.randint(0, 40)))
+        draw = ImageDraw.Draw(img)
 
-            raise ValueError("Invalid image URL from Gemini.")
-        except Exception as e:
-            print(f"⚠️ Image generation failed: {e}")
-            # fallback: black image with text
-            img = Image.new("RGB", (1280, 720), color=(0, 0, 0))
-            draw = ImageDraw.Draw(img)
-            font = ImageFont.truetype(self.font_path, 48)
-            draw.text((50, 300), prompt, font=font, fill=(255, 255, 255))
-            return img
+        # Font
+        font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        font = ImageFont.truetype(font_path, 42) if os.path.exists(font_path) else ImageFont.load_default()
 
-    # 🎙️ Generate voice narration
-    def generate_voice(self, text: str):
-        tts = gTTS(text)
-        temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-        tts.save(temp_audio.name)
-        return temp_audio.name
+        # Wrap text
+        lines = textwrap.wrap(text, width=40)
+        y = (size[1] - len(lines) * 50) // 2
+        for line in lines:
+            w = font.getlength(line)
+            draw.text(((size[0] - w) / 2, y), line, font=font, fill=(255, 255, 255))
+            y += 60
 
-    # 🎬 Create the video
-    def make_video(self, topic: str):
-        script = self.generate_script(topic)
-        sentences = script.split(".")
-        image_clips = []
+        return img
 
-        for line in sentences:
-            line = line.strip()
-            if not line:
-                continue
+    # -------------------
+    # Main Video Builder
+    # -------------------
+    def make_video(self, prompt: str):
+        print(f"🎬 Creating video for: {prompt}")
+        script = self.generate_script(prompt)
 
-            img = self.generate_image(line)
-            temp_img = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-            img.save(temp_img.name)
+        uid = uuid.uuid4().hex[:8]
+        audio_path = self.video_dir / f"{uid}.mp3"
+        video_path = self.video_dir / f"{uid}.mp4"
 
-            clip = ImageClip(temp_img.name).set_duration(4)
-            image_clips.append(clip)
+        # Generate voiceover
+        print("🎙️ Generating voice...")
+        tts = gTTS(script, lang="en")
+        tts.save(str(audio_path))
 
-        final_video = concatenate_videoclips(image_clips, method="compose")
+        audio = AudioFileClip(str(audio_path))
+        duration = audio.duration
 
-        # Add voice narration
-        audio_path = self.generate_voice(script)
-        audio_clip = AudioFileClip(audio_path)
-        final_video = final_video.set_audio(audio_clip)
+        # Split script
+        sentences = [s.strip() for s in script.split(".") if s.strip()]
+        per_slide = duration / max(1, len(sentences))
+        frames = []
 
-        # Export video
-        output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-        final_video.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
+        # Generate images
+        for text in sentences:
+            img = self.create_image(text)
+            temp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+            img.save(temp.name)
+            frames.append(temp.name)
 
-        return output_path
+        # Build video
+        print("🎞️ Combining video...")
+        clip = ImageSequenceClip(frames, durations=[per_slide] * len(frames))
+        clip = clip.set_audio(audio)
+        clip.write_videofile(str(video_path), fps=24, codec="libx264", audio_codec="aac", verbose=False, logger=None)
+
+        print(f"✅ Video saved to: {video_path}")
+        return str(video_path)
