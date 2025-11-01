@@ -1,85 +1,110 @@
 import os
-import io
+import tempfile
 import textwrap
-import numpy as np
+import requests
+from moviepy.editor import (
+    ImageClip,
+    concatenate_videoclips,
+    AudioFileClip,
+)
 from gtts import gTTS
-from PIL import Image, ImageDraw, ImageFont
-from moviepy.editor import ImageClip, concatenate_videoclips, AudioFileClip, CompositeAudioClip
+from PIL import Image
+from io import BytesIO
 
-def make_video(script_text: str, topic: str) -> str:
+# 🔑 Optional: use your Gemini / OpenAI / HuggingFace key if available
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# ==============================
+# Helper: Generate image with fallback
+# ==============================
+def generate_image(prompt):
     """
-    Generate a narrated video using TTS + slideshow.
-    Returns path to the created video file.
+    Generate an image using OpenAI or fallback to Unsplash.
     """
+    try:
+        if GEMINI_API_KEY:
+            import google.generativeai as genai
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel("imagen-3.0")
+            img = model.generate_images(prompt)[0]
+            img.save("temp_img.jpg")
+            return "temp_img.jpg"
+        else:
+            # Fallback: Unsplash image
+            response = requests.get(
+                f"https://source.unsplash.com/1280x720/?{prompt.replace(' ', ',')}"
+            )
+            img = Image.open(BytesIO(response.content))
+            temp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+            img.save(temp.name)
+            return temp.name
+    except Exception as e:
+        print("⚠️ Image generation failed:", e)
+        img = Image.new("RGB", (1280, 720), color=(0, 0, 0))
+        temp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+        img.save(temp.name)
+        return temp.name
 
-    # === Step 1: Split text into slides ===
-    lines = [line.strip() for line in script_text.split(".") if line.strip()]
-    if not lines:
-        lines = ["(No content provided)"]
 
-    slides = []
+# ==============================
+# Helper: Generate voiceover
+# ==============================
+def generate_voiceover(text, lang="en"):
+    """
+    Convert text to speech using gTTS
+    """
+    tts = gTTS(text=text, lang=lang)
+    temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    tts.save(temp_audio.name)
+    return temp_audio.name
 
-    for line in lines:
-        # === Create a blank image ===
-        img = Image.new("RGB", (1280, 720), color=(15, 15, 15))
-        draw = ImageDraw.Draw(img)
 
-        # === Load font ===
-        try:
-            font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-            font = ImageFont.truetype(font_path, 50)
-        except Exception:
-            font = ImageFont.load_default()
+# ==============================
+# Main function: make video
+# ==============================
+def make_video(title, script_text):
+    """
+    Create a narrated slideshow video with AI images + voiceover
+    """
+    print(f"🎬 Building video for: {title}")
 
-        # === Wrap and center text ===
-        wrapped = textwrap.fill(line, width=25)
-        text_bbox = draw.multiline_textbbox((0, 0), wrapped, font=font)
-        text_w, text_h = text_bbox[2] - text_bbox[0], text_bbox[3] - text_bbox[1]
-        x = (1280 - text_w) // 2
-        y = (720 - text_h) // 2
-        draw.multiline_text((x, y), wrapped, font=font, fill=(240, 240, 240), align="center")
-
-        # === Convert image to numpy array for moviepy ===
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        buf.seek(0)
-        frame = np.array(Image.open(buf))
-        slides.append(frame)
-
-    # === Step 2: Create video from slides ===
+    # Split script into short scenes
+    sentences = textwrap.wrap(script_text, width=150)
     clips = []
-    for i, frame in enumerate(slides):
-        clip = ImageClip(frame).set_duration(3)
-        if i > 0:
-            clip = clip.crossfadein(0.5)
-        clips.append(clip)
+    audio_paths = []
 
-    video = concatenate_videoclips(clips, method="compose")
+    for i, sentence in enumerate(sentences, 1):
+        print(f"🖼️ Scene {i}: {sentence[:60]}...")
+        img_path = generate_image(f"{title}, cinematic, realistic, high quality")
+        audio_path = generate_voiceover(sentence)
+        audio_paths.append(audio_path)
 
-    # === Step 3: Add narration ===
-    audio_path = "narration.mp3"
-    tts = gTTS(script_text)
-    tts.save(audio_path)
-    narration = AudioFileClip(audio_path)
+        # Create video clip with image
+        img_clip = ImageClip(img_path).set_duration(6)
+        audio_clip = AudioFileClip(audio_path)
+        img_clip = img_clip.set_audio(audio_clip)
+        clips.append(img_clip)
 
-    # Optional: Add background music (if file exists)
-    bg_music_path = "background.mp3"
-    if os.path.exists(bg_music_path):
-        bg_music = AudioFileClip(bg_music_path).volumex(0.15)
-        final_audio = CompositeAudioClip([narration, bg_music.set_duration(narration.duration)])
-    else:
-        final_audio = narration
+    # Combine all scenes
+    final_video = concatenate_videoclips(clips, method="compose")
 
-    video = video.set_audio(final_audio)
-
-    # === Step 4: Export final video ===
-    temp_path = f"{topic.replace(' ', '_')}.mp4"
-    video.write_videofile(temp_path, fps=24, codec="libx264", audio_codec="aac")
+    # Save video file
+    temp_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    final_video.write_videofile(
+        temp_path.name,
+        fps=24,
+        codec="libx264",
+        audio_codec="aac",
+        verbose=False,
+        logger=None
+    )
 
     # Cleanup
-    narration.close()
-    if os.path.exists(audio_path):
-        os.remove(audio_path)
+    for p in audio_paths:
+        try:
+            os.remove(p)
+        except:
+            pass
 
-    # === Step 5: Return path ===
-    return temp_path
+    print(f"✅ Video created: {temp_path.name}")
+    return temp_path.name
