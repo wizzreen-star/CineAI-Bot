@@ -7,72 +7,99 @@ import requests
 from PIL import Image
 from io import BytesIO
 
+
 class VideoMaker:
     def __init__(self, gemini_api_key=None):
         self.gemini_api_key = gemini_api_key
 
     async def make_video(self, prompt, notify_func=None):
-        """Generate a video with images, text, and narration."""
+        """Generate a REAL AI video with image backgrounds + voice + text."""
+
         if notify_func:
             await notify_func("✍️ Writing script...")
 
-        # Create simple narration script
-        script = f"This video is about {prompt}. Let's explore the topic in depth and discover how it impacts our world."
+        script = f"This video explores {prompt}. Let's dive into how it is shaping our world today."
 
         if notify_func:
             await notify_func("🎙️ Generating voice narration...")
 
-        # Generate voice using gTTS
+        # Generate TTS narration
         tts = gTTS(script)
         voice_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
         tts.save(voice_path)
 
         if notify_func:
-            await notify_func("🖼️ Creating video slides...")
+            await notify_func("🖼️ Downloading background visuals...")
 
-        # Download some random images from Unsplash (based on keywords)
+        # Download random topic-related images
         keywords = prompt.split()
         random.shuffle(keywords)
         images = []
 
-        for word in keywords[:3]:  # Limit to 3 images
+        for word in keywords[:4]:
             try:
                 url = f"https://source.unsplash.com/1280x720/?{word}"
-                img_data = requests.get(url, timeout=10).content
-                img = Image.open(BytesIO(img_data)).convert("RGB")
-                path = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg").name
-                img.save(path)
-                images.append(path)
-            except Exception:
+                response = requests.get(url, timeout=10)
+                img = Image.open(BytesIO(response.content)).convert("RGB")
+                img_path = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg").name
+                img.save(img_path)
+                images.append(img_path)
+            except Exception as e:
+                print("⚠️ Image download failed:", e)
                 continue
 
-        # If no images downloaded, fallback to black background
         if not images:
-            clip = ColorClip(size=(1280, 720), color=(0, 0, 0), duration=10)
-            clip = clip.set_audio(AudioFileClip(voice_path))
-            output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-            clip.write_videofile(output_path, fps=24)
-            return output_path
-
-        # Create slideshow from images
-        clips = []
-        for img_path in images:
-            img_clip = ImageClip(img_path).set_duration(5)
-            txt_clip = TextClip(prompt, fontsize=48, color='white', size=(1200, None), method='caption')
-            txt_clip = txt_clip.set_position('center').set_duration(5)
-            clips.append(CompositeVideoClip([img_clip, txt_clip]))
-
-        video = concatenate_videoclips(clips, method="compose")
-
-        # Add audio
-        audio = AudioFileClip(voice_path)
-        final_video = video.set_audio(audio)
-
-        # Export video
-        output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-        final_video.write_videofile(output_path, fps=24, codec='libx264', audio_codec='aac')
+            if notify_func:
+                await notify_func("⚠️ No images found — using fallback visuals.")
+            images = [None]
 
         if notify_func:
-            await notify_func("✅ Video generation complete!")
+            await notify_func("🎬 Building cinematic video...")
+
+        # Load voice
+        audio_clip = AudioFileClip(voice_path)
+        duration = audio_clip.duration
+        per_image = duration / len(images)
+
+        clips = []
+        for i, img_path in enumerate(images):
+            if img_path:
+                img_clip = ImageClip(img_path).set_duration(per_image)
+            else:
+                img_clip = ColorClip(size=(1280, 720), color=(0, 0, 0)).set_duration(per_image)
+
+            # Add subtle zoom-in effect
+            img_clip = img_clip.fx(vfx.zoom_in, 1.05)
+
+            # Overlay caption text
+            text_clip = TextClip(
+                txt=prompt,
+                fontsize=48,
+                color='white',
+                stroke_color='black',
+                stroke_width=2,
+                font="DejaVu-Sans",
+                size=(1200, None),
+                method='caption'
+            ).set_position(('center', 'bottom')).set_duration(per_image)
+
+            final_frame = CompositeVideoClip([img_clip, text_clip])
+            clips.append(final_frame)
+
+        video = concatenate_videoclips(clips, method="compose")
+        final_video = video.set_audio(audio_clip)
+
+        output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+        final_video.write_videofile(
+            output_path,
+            fps=24,
+            codec="libx264",
+            audio_codec="aac",
+            threads=4,
+            preset="medium"
+        )
+
+        if notify_func:
+            await notify_func("✅ Video ready! Sending now...")
 
         return output_path
