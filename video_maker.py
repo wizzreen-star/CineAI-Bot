@@ -33,7 +33,8 @@ def make_video(script_text: str, topic: str) -> str:
 
         # === Wrap and center text ===
         wrapped = textwrap.fill(line, width=25)
-        text_w, text_h = draw.multiline_textbbox((0, 0), wrapped, font=font)[2:]
+        text_bbox = draw.multiline_textbbox((0, 0), wrapped, font=font)
+        text_w, text_h = text_bbox[2] - text_bbox[0], text_bbox[3] - text_bbox[1]
         x = (1280 - text_w) // 2
         y = (720 - text_h) // 2
         draw.multiline_text((x, y), wrapped, font=font, fill=(240, 240, 240), align="center")
