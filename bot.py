@@ -1,56 +1,82 @@
 import os
 import discord
 from discord.ext import commands
-from video_maker import VideoMaker
+from flask import Flask, Response
+from threading import Thread
+import asyncio
+from video_maker import VideoMaker  # ✅ must exist in your repo (video_maker.py)
 
-TOKEN = os.getenv("DISCORD_TOKEN")  # or paste your token directly (not recommended)
+# ===============================
+# 🔧 ENVIRONMENT VARIABLES
+# ===============================
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Enable message content intent so the bot can read user messages
+if not DISCORD_TOKEN or not GEMINI_API_KEY:
+    raise ValueError("❌ Missing DISCORD_TOKEN or GEMINI_API_KEY in environment variables!")
+
+# ===============================
+# 🌐 FLASK HEALTH CHECK (REQUIRED BY RENDER)
+# ===============================
+app = Flask("cineai")
+
+@app.route("/")
+def index():
+    return Response("✅ CineAI bot is running", mimetype="text/plain")
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+
+# ===============================
+# 🤖 DISCORD BOT SETUP
+# ===============================
 intents = discord.Intents.default()
 intents.message_content = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-video_maker = VideoMaker(gemini_api_key=GEMINI_API_KEY)
-
+video_maker = VideoMaker(GEMINI_API_KEY)
 
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} — CineAI is ready!")
 
-
-# ---------------------------------------------------------
-# 🎬 Command: !video <prompt>
-# ---------------------------------------------------------
-@bot.command(name="video")
-async def make_video(ctx, *, prompt: str):
-    """Create an AI-generated video."""
-    await ctx.send(f"🎥 Generating video for: **{prompt}** … this may take 1–2 minutes")
-
-    def notify(msg):
-        try:
-            import asyncio
-            asyncio.run_coroutine_threadsafe(ctx.send(msg), bot.loop)
-        except Exception as e:
-            print("Notify error:", e)
+# ===============================
+# 🎬 VIDEO COMMAND
+# ===============================
+@bot.command()
+async def video(ctx, *, prompt: str):
+    await ctx.send(f"🎬 Generating a video for: **{prompt}** — please wait...")
 
     try:
-        output_path = video_maker.make_video(prompt, notify_func=notify)
-        await ctx.send("✅ Video created successfully!", file=discord.File(output_path))
+        def notify(msg):
+            asyncio.run_coroutine_threadsafe(ctx.send(msg), bot.loop)
+
+        video_path = video_maker.make_video(prompt, notify_func=notify)
+
+        if not video_path or not os.path.exists(video_path):
+            await ctx.send("❌ Failed to create video.")
+            return
+
+        await ctx.send(file=discord.File(video_path))
+        os.remove(video_path)
+
     except Exception as e:
-        await ctx.send(f"❌ Failed to generate video: {e}")
-        print("Error:", e)
+        await ctx.send(f"❌ Error: {e}")
 
-
-# ---------------------------------------------------------
-# 🏓 Simple test command
-# ---------------------------------------------------------
-@bot.command(name="ping")
-async def ping(ctx):
-    await ctx.send("🏓 Pong!")
-
+# ===============================
+# 🚀 START BOTH FLASK + DISCORD
+# ===============================
+def run_discord():
+    bot.run(DISCORD_TOKEN)
 
 if __name__ == "__main__":
-    print("🚀 Starting CineAI bot...")
-    bot.run(TOKEN)
+    # Start Flask first — so Render detects the open port
+    Thread(target=run_flask, daemon=True).start()
+
+    # Short delay so Render sees open port before bot runs
+    import time
+    time.sleep(1.0)
+
+    # Run the Discord bot (blocking)
+    run_discord()
