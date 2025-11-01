@@ -11,15 +11,15 @@ from gtts import gTTS
 class VideoMaker:
     def __init__(self, gemini_api_key=None):
         self.gemini_api_key = gemini_api_key
-        if genai and gemini_api_key:
+        if gemini_api_key:
             genai.configure(api_key=gemini_api_key)
 
         self.font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-    # ✍️ Generate a short AI script
+    # ✍️ Generate short AI narration
     def generate_script(self, topic: str):
         model = genai.GenerativeModel("gemini-1.5-flash")
-        prompt = f"Write a short video narration script (3-5 sentences) about: {topic}"
+        prompt = f"Write a short engaging video script (3–5 sentences) about: {topic}"
         response = model.generate_content(prompt)
         return response.text.strip()
 
@@ -33,25 +33,25 @@ class VideoMaker:
             if image_url.startswith("http"):
                 img_data = requests.get(image_url).content
                 return Image.open(BytesIO(img_data)).convert("RGB")
-            else:
-                raise ValueError("Invalid image URL")
+
+            raise ValueError("Invalid image URL from Gemini.")
         except Exception as e:
             print(f"⚠️ Image generation failed: {e}")
-            # fallback to simple black image with text
+            # fallback: black image with text
             img = Image.new("RGB", (1280, 720), color=(0, 0, 0))
             draw = ImageDraw.Draw(img)
             font = ImageFont.truetype(self.font_path, 48)
             draw.text((50, 300), prompt, font=font, fill=(255, 255, 255))
             return img
 
-    # 🎙️ Generate narration using gTTS
+    # 🎙️ Generate voice narration
     def generate_voice(self, text: str):
         tts = gTTS(text)
         temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
         tts.save(temp_audio.name)
         return temp_audio.name
 
-    # 🎬 Make video
+    # 🎬 Create the video
     def make_video(self, topic: str):
         script = self.generate_script(topic)
         sentences = script.split(".")
@@ -71,29 +71,13 @@ class VideoMaker:
 
         final_video = concatenate_videoclips(image_clips, method="compose")
 
-        # voiceover
+        # Add voice narration
         audio_path = self.generate_voice(script)
         audio_clip = AudioFileClip(audio_path)
         final_video = final_video.set_audio(audio_clip)
 
+        # Export video
         output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
         final_video.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
 
-        return output_path        random.shuffle(keywords)
-        clip_dur = max(4, int(total_dur / len(keywords)))
-
-        clips = [self.download_clip(k, clip_dur) for k in keywords]
-        final_clip = mp.concatenate_videoclips(clips, method="compose").set_audio(narration).set_fps(24)
-
-        log("🖋️ Adding title overlay...")
-        txt = mp.TextClip(topic, fontsize=70, color='white', font='DejaVu-Sans')
-        txt = txt.set_position(('center', 'bottom')).set_duration(3)
-        composed = mp.CompositeVideoClip([final_clip, txt])
-
-        log("💾 Rendering video...")
-        out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-        composed.write_videofile(out_path, codec='libx264', audio_codec='aac', verbose=False, logger=None)
-
-        narration.close()
-        log("✅ Done! Returning video.")
-        return out_path
+        return output_path
