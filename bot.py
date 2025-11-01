@@ -1,73 +1,84 @@
-# ================================================================
-# 🎬 CineAI Discord Bot — Auto Video Maker
-# ================================================================
-
+# bot.py
 import os
-import asyncio
 from threading import Thread
 from flask import Flask, Response
-import discord
 from discord.ext import commands
+import discord
+from video_maker import VideoMaker
 
-from video_maker import make_video  # 👈 import from your video_maker.py
+# -----------------------
+# Config (set in Render)
+# -----------------------
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")         # required
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")       # required for Gemini features (text/images/tts)
+PORT = int(os.environ.get("PORT", 10000))
 
-# -------------------
-# Configuration
-# -------------------
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # optional
+if not DISCORD_TOKEN:
+    print("❌ ERROR: set DISCORD_TOKEN in environment variables.")
+if not GEMINI_API_KEY:
+    print("⚠️ Warning: GEMINI_API_KEY not set — the bot will use fallbacks for images/tts.")
 
-# -------------------
-# Discord Setup
-# -------------------
+# -----------------------
+# Discord bot
+# -----------------------
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# -------------------
-# Events
-# -------------------
+video_maker = VideoMaker(gemini_api_key=GEMINI_API_KEY)
+
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user} — ready to make videos!")
+    print(f"✅ Logged in as {bot.user} (id={bot.user.id}) — CineAI ready.")
 
-# -------------------
-# Commands
-# -------------------
+@bot.command(name="hello")
+async def hello(ctx):
+    await ctx.send("👋 Hello! I’m CineAI — send `!video <prompt>` to generate a short AI video.")
+
 @bot.command(name="video")
-async def create_video(ctx, *, prompt: str):
-    """Generate an AI video from a topic"""
-    await ctx.send(f"🎬 Generating a video for: **{prompt}** — please wait...")
+async def video_cmd(ctx, *, prompt: str):
+    """
+    Usage: !video <prompt>
+    Example: !video a dog running on a beach at sunset
+    """
+    # notify user
+    await ctx.send(f"🎬 Generating a video for: **{prompt}** — this may take 30s–5m depending on resources.")
 
+    # create video using VideoMaker (runs heavy work in background threads)
     try:
-        # use make_video() from video_maker.py
-        video_path = await asyncio.to_thread(make_video, prompt, prompt)
-        await ctx.send(file=discord.File(video_path))
+        out_path = await video_maker.make_video_for_prompt(prompt, notify_func=lambda s: ctx.send(s))
     except Exception as e:
-        await ctx.send(f"❌ Failed to make video: {e}")
+        await ctx.send(f"❌ Failed to generate video: {e}")
+        return
 
-# -------------------
-# Flask (for Render)
-# -------------------
+    # send the final video (if not larger than discord limit)
+    try:
+        size_mb = os.path.getsize(out_path) / (1024 * 1024)
+        if size_mb < 24:
+            await ctx.send(file=discord.File(out_path))
+        else:
+            await ctx.send(f"✅ Video created: `{out_path}` ({size_mb:.1f} MB). It's available on the server.")
+    except Exception as e:
+        await ctx.send(f"✅ Video created but failed to upload to Discord: {e}\nSaved at `{out_path}`")
+
+# -----------------------
+# Flask health endpoint for Render
+# -----------------------
 app = Flask("cineai")
-
 @app.route("/")
 def index():
-    return Response("✅ CineAI bot running!", mimetype="text/plain")
+    return Response("CineAI bot running", mimetype="text/plain")
 
 def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=PORT)
 
 def run_discord():
     if not DISCORD_TOKEN:
-        print("❌ ERROR: DISCORD_TOKEN not set in environment.")
+        print("❌ No DISCORD_TOKEN; exiting bot.")
         return
     bot.run(DISCORD_TOKEN)
 
-# -------------------
-# Start both
-# -------------------
 if __name__ == "__main__":
+    # start Flask so Render sees a web service
     Thread(target=run_flask, daemon=True).start()
     run_discord()
