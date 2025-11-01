@@ -1,110 +1,59 @@
-# ================================================================
-# 🤖 CineAI Discord Bot — Uses Gemini + video_maker
-# ================================================================
-
 import os
-import asyncio
-from threading import Thread
-from pathlib import Path
-from flask import Flask, Response
 import discord
+import asyncio
+import google.generativeai as genai
 from discord.ext import commands
-from video_maker import build_video  # Import from your new file
+from dotenv import load_dotenv
+from video_maker import make_video
 
-# Optional Gemini AI
-try:
-    import google.generativeai as genai
-    HAVE_GEMINI = True
-except Exception:
-    HAVE_GEMINI = False
+# Load environment variables
+load_dotenv()
 
-# -------------------
-# Config
-# -------------------
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# -------------------
-# Discord Setup
-# -------------------
+if not DISCORD_TOKEN or not GEMINI_API_KEY:
+    raise ValueError("❌ Missing DISCORD_TOKEN or GEMINI_API_KEY in .env file!")
+
+# Configure Gemini API
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-1.5-flash")
+
+# Initialize bot
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-if HAVE_GEMINI and GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-    except Exception as e:
-        print("⚠️ Gemini setup failed:", e)
-        HAVE_GEMINI = False
-
-
-# -------------------
-# Script Generation
-# -------------------
-def generate_script(prompt: str) -> str:
-    if HAVE_GEMINI and GEMINI_API_KEY:
-        try:
-            response = genai.GenerativeModel("gemini-pro").generate_content(
-                f"Write a 1-minute video narration about: {prompt}. "
-                "Make it friendly, simple, and engaging."
-            )
-            if hasattr(response, "text") and response.text:
-                return response.text.strip()
-        except Exception as e:
-            print("⚠️ Gemini failed:", e)
-
-    return (
-        f"🎬 Title: {prompt}\n\n"
-        "Scene 1: Introduce the topic.\n"
-        "Scene 2: Explain its impact or story.\n"
-        "Scene 3: End with a short conclusion.\n"
-    )
-
-
-# -------------------
-# Discord Commands
-# -------------------
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
 
-
 @bot.command(name="video")
-async def make_video(ctx, *, prompt: str):
-    await ctx.send(f"🎬 Generating a video for: **{prompt}** — please wait...")
+async def generate_video(ctx, *, topic: str):
+    """Generates an AI video from a topic using Gemini + MoviePy."""
+    await ctx.reply(f"🎬 Generating a video for: **{topic}** — please wait...")
 
     try:
+        # Step 1: Generate script
         await ctx.send("✍️ Writing script...")
-        script = await asyncio.to_thread(generate_script, prompt)
+        prompt = f"Write a short, engaging 5-sentence script about: {topic}"
+        response = model.generate_content(prompt)
+        script = response.text.strip()
 
-        await ctx.send("🎙️ Generating voice + visuals...")
-        video_path = await build_video(prompt, script)
+        # Step 2: Generate video
+        await ctx.send("🎥 Building the video...")
+        video_path = make_video(script, topic)
 
-        # Upload or notify
-        size = video_path.stat().st_size / (1024 * 1024)
-        if size < 24:
-            await ctx.send(file=discord.File(str(video_path)))
+        # Step 3: Send result
+        if os.path.exists(video_path):
+            await ctx.send("✅ Done! Here's your video:", file=discord.File(video_path))
         else:
-            await ctx.send(f"✅ Video created ({size:.1f} MB). Too large to upload, saved at `{video_path}`.")
-
+            await ctx.send("❌ Failed to create video file.")
     except Exception as e:
-        await ctx.send(f"❌ Failed to build video: {e}")
+        await ctx.send(f"❌ Error: {e}")
 
-
-# -------------------
-# Flask (for Render)
-# -------------------
-app = Flask("cineai")
-
-@app.route("/")
-def index():
-    return Response("✅ CineAI bot running!", mimetype="text/plain")
-
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
-
+if __name__ == "__main__":
+    bot.run(DISCORD_TOKEN)
 def run_discord():
     if not DISCORD_TOKEN:
         print("❌ ERROR: DISCORD_TOKEN not set.")
